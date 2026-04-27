@@ -121,9 +121,9 @@ func runSetup() {
 		sandboxVal = "false"
 	}
 
-	llmURL := read("LLM API 地址 (例: https://api.openai.com/v1)", "http://10.10.10.233:3000/openai-custom-cn/v1")
-	llmKey := read("LLM API Key", "sk-11122333444555")
-	llmModel := read("LLM 模型名", "kimi-k2.5")
+	llmURL := read("LLM API 地址 (例: https://api.openai.com/v1)", "")
+	llmKey := read("LLM API Key", "")
+	llmModel := read("LLM 模型名", "gpt-4o")
 
 	proxyPort := read("代理监听端口", "8080")
 
@@ -239,7 +239,7 @@ func main() {
 			runSetup()
 			return
 		case "version", "-v", "--version":
-			fmt.Println("qapi version 0.1")
+			fmt.Println("qapi version 0.2")
 			return
 		}
 	}

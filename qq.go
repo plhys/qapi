@@ -530,7 +530,7 @@ func looksLikeFabricatedData(content string) bool {
 }
 
 func (b *QQBot) executeTool(name, args string) string {
-	adminURL := "http://127.0.0.1:18885"
+	adminURL := fmt.Sprintf("http://127.0.0.1%s", b.cfg.Proxy.Listen)
 	log.Printf("[Tools] 执行 %s %s", name, truncate(args, 100))
 
 	switch name {
@@ -677,7 +677,7 @@ func (b *QQBot) adminPost(endpoint string, args ...interface{}) string {
 		reader = strings.NewReader(argsStr(args))
 	}
 
-	req, err := http.NewRequest(method, "http://127.0.0.1:18885"+endpoint, reader)
+	req, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1%s%s", b.cfg.Proxy.Listen, endpoint), reader)
 	if err != nil {
 		return fmt.Sprintf(`{"error":"%v"}`, err)
 	}

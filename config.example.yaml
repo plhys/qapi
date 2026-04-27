@@ -11,17 +11,17 @@ qq:
 llm:
   provider: "openai"
   api_key: "sk-your-key"
-  base_url: "http://10.10.10.233:3000/openai-custom-cn/v1"
-  model: "kimi-k2.5"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
 
 # API 代理配置
 proxy:
-  listen: ":18885"
+  listen: ":8080"
 
   # 默认上游池（/v1/chat 等）
   pool:
     upstreams:
-      - url: "http://10.10.10.233:3000/openai-custom-cn/v1"
+      - url: "https://api.openai.com/v1"
         key: "sk-your-key"
         weight: 1
     fallback:
