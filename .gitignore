@@ -1,0 +1,7 @@
+qapi
+yaoyaojiu
+data/
+*.log
+*.tmp
+.DS_Store
+config.yaml

@@ -1,0 +1,48 @@
+# Qapi 配置文件
+# ================
+
+# QQ Bot 配置 - 在 https://q.qq.com 创建机器人获取
+qq:
+  app_id: "YOUR_QQ_APP_ID"
+  app_secret: "YOUR_QQ_APP_SECRET"
+  sandbox: true
+
+# LLM 配置（Bot 对话用）
+llm:
+  provider: "openai"
+  api_key: "sk-your-key"
+  base_url: "http://10.10.10.233:3000/openai-custom-cn/v1"
+  model: "kimi-k2.5"
+
+# API 代理配置
+proxy:
+  listen: ":18885"
+
+  # 默认上游池（/v1/chat 等）
+  pool:
+    upstreams:
+      - url: "http://10.10.10.233:3000/openai-custom-cn/v1"
+        key: "sk-your-key"
+        weight: 1
+    fallback:
+      - "glm-5"
+      - "kimi-k2.5"
+    max_retries: 2
+
+  # 路径路由规则（可选的独立上游池）
+  # routes:
+  #   - path: "/v1/images"
+  #     pool:
+  #       upstreams:
+  #         - url: "https://api.openai.com"
+  #           key: "sk-xxx"
+  #       max_retries: 1
+
+# 故障通知 - 上游挂掉时 QQ Bot 发消息给此用户
+notify:
+  qq_user: ""   # 填你的 QQ OpenID（收到机器人私聊后可获取）
+
+# 对话记忆
+memory:
+  path: "./data/memory.json"
+  max_turns: 20
