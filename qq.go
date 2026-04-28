@@ -321,6 +321,13 @@ func (b *QQBot) callLLM(chatID string) string {
 		{
 			"type": "function",
 			"function": map[string]interface{}{
+				"name":        "update_qapi",
+				"description": "在线更新 Qapi 到最新版本（从 GitHub Release 下载并自动重启）",
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]interface{}{
 				"name":        "list_upstreams",
 				"description": "列出所有上游及其状态：URL、健康否、请求数、失败数",
 			},
@@ -963,6 +970,9 @@ func (b *QQBot) executeTool(name, args string) string {
 		}
 		return b.runCmd("systemctl", p.Action, p.Service)
 
+	case "update_qapi":
+		return b.selfUpdate()
+
 	case "add_upstream":
 		return b.adminPost("/admin/upstreams", args)
 
@@ -1017,6 +1027,19 @@ func argsStr(args []interface{}) string {
 		}
 	}
 	return ""
+}
+
+func (b *QQBot) selfUpdate() string {
+	resp, err := http.Post("http://127.0.0.1"+b.cfg.Proxy.Listen+"/admin/update", "application/json", nil)
+	if err != nil {
+		return fmt.Sprintf("更新失败: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Sprintf("更新失败(%d): %s", resp.StatusCode, string(body))
+	}
+	return "正在更新到最新版本，2秒后自动重启..."
 }
 
 func (b *QQBot) runCmd(name string, arg ...string) string {

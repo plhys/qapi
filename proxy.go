@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -382,6 +384,8 @@ func (p *Proxy) ListenAndServe() error {
 	mux.HandleFunc("/v1/", p.ServeHTTP)
 	mux.HandleFunc("/v2/", p.ServeHTTP)
 	mux.HandleFunc("/admin/upstreams", p.ServeAdmin)
+	mux.HandleFunc("/admin/update", p.ServeUpdate)
+	mux.HandleFunc("/admin/update/check", p.ServeUpdateCheck)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		io.WriteString(w, "ok")
@@ -403,6 +407,80 @@ func (p *Proxy) ListenAndServe() error {
 
 	log.Printf("[Proxy] 监听 %s", p.cfg.Proxy.Listen)
 	return srv.ListenAndServe()
+}
+
+// ServeUpdateCheck checks GitHub for the latest release version.
+func (p *Proxy) ServeUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	resp, err := http.Get("https://api.github.com/repos/plhys/qapi/releases/latest")
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	var release struct {
+		TagName string `json:"tag_name"`
+		Name    string `json:"name"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		json.NewEncoder(w).Encode(map[string]string{"error": "parse failed"})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{
+		"latest":   release.TagName,
+		"name":     release.Name,
+		"url":      release.HTMLURL,
+		"current":  "v0.3",
+	})
+}
+
+// ServeUpdate downloads the latest binary and replaces itself.
+func (p *Proxy) ServeUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"POST only"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Find current binary path
+	exe, _ := os.Executable()
+	tmpFile := exe + ".new"
+
+	log.Printf("[Update] 下载最新版本...")
+	resp, err := http.Get("https://github.com/plhys/qapi/releases/latest/download/qapi")
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"download failed: %v"}`, err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		http.Error(w, fmt.Sprintf(`{"error":"download error: %d"}`, resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"create temp: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	io.Copy(f, resp.Body)
+	f.Close()
+	os.Chmod(tmpFile, 0755)
+
+	// Atomic replace
+	if err := os.Rename(tmpFile, exe); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"replace: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+	log.Printf("[Update] 更新完成，2秒后退出")
+	go func() {
+		time.Sleep(2 * time.Second)
+		os.Exit(0)
+	}()
 }
 
 func maskKey(k string) string {
