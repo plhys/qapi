@@ -64,6 +64,22 @@ Qapi 是一个 Go 语言编写的 QQ 机器人 + LLM API 反向代理网关。�
 - 启动校验：占位 AppID/AppSecret 直接 `log.Fatalf` 退出
 - Token 解析兼容 `expires_in` 字符串/整数
 
+### v0.3 — 智能运维体 + 用户体验
+
+#### QQ 机器人智能化
+- **解除限制**：系统提示词从"只能调工具"改为"常识直接答，运维调工具"，超出范围也能正常对话
+- **新增 4 个工具**：
+  - `web_search` — DuckDuckGo 搜索互联网
+  - `run_shell` — 执行任意 shell 命令（部署、杀进程、清内存、git 操作等）
+  - `read_file` — 读取服务器文件（日志、配置、代码）
+  - `manage_service` — systemd 服务管理（启停/重启/状态查询）
+- **输出格式化**：工具结果先转可读文本再喂给 LLM，杜绝原始 JSON 出现在回复中
+- **假数据检测优化**：不再拦截常识回答，只标记"虚构服务器信息"的情况
+
+#### 代理功能改进
+- **同 URL 不同 Key 可添加**：去重键从 URL 改为 URL+Key，同一上游多 Key 轮询
+- **上游列表格式化**：`/admin/upstreams` 返回更友好的统计摘要
+
 ### 审计修复 (v0.2-hotfix)
 
 - 工具层 `adminURL` 从硬编码 `:18885` 改为 `cfg.Proxy.Listen` 动态读取
@@ -148,7 +164,7 @@ qapi/
 
 ### 直接运行
 ```bash
-wget https://github.com/plhys/qapi/releases/download/v0.2/qapi-linux-amd64
+wget https://github.com/plhys/qapi/releases/download/v0.3/qapi-linux-amd64
 chmod +x qapi-linux-amd64
 ./qapi-linux-amd64 setup
 ./qapi-linux-amd64 config.yaml

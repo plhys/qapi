@@ -330,7 +330,7 @@ func (p *Proxy) adminAdd(pool *UpstreamPool, w http.ResponseWriter, r *http.Requ
 
 	states := pool.upstreams.Load().([]UpstreamState)
 	for _, s := range states {
-		if s.URL == add.URL {
+		if s.URL == add.URL && s.Key == add.Key {
 			http.Error(w, `{"error":"already exists"}`, http.StatusConflict)
 			return
 		}
