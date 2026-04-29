@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -155,6 +157,21 @@ func (p *Proxy) getOrCreateProxy(upstreamURL string, target *url.URL) *httputil.
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = 100 * time.Millisecond
 	rp.ModifyResponse = func(resp *http.Response) error {
+		if resp.Header.Get("Content-Encoding") == "" && resp.Body != nil {
+			peek := make([]byte, 2)
+			n, _ := io.ReadFull(resp.Body, peek)
+			if n == 2 && peek[0] == 0x1f && peek[1] == 0x8b {
+				gr, err := gzip.NewReader(io.MultiReader(bytes.NewReader(peek), resp.Body))
+				if err == nil {
+					resp.Body = gr
+					resp.Header.Del("Content-Length")
+					resp.Header.Set("Content-Encoding", "identity")
+					resp.Uncompressed = true
+				}
+			} else {
+				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(peek[:n]), resp.Body))
+			}
+		}
 		resp.Header.Del("Server")
 		resp.Header.Del("Via")
 		resp.Header.Del("X-Powered-By")
@@ -163,6 +180,15 @@ func (p *Proxy) getOrCreateProxy(upstreamURL string, target *url.URL) *httputil.
 		resp.Header.Del("X-Ratelimit-Remaining")
 		resp.Header.Del("X-Ratelimit-Limit")
 		resp.Header.Del("X-Ratelimit-Reset")
+		resp.Header.Del("Access-Control-Allow-Origin")
+		resp.Header.Del("Access-Control-Allow-Methods")
+		resp.Header.Del("Access-Control-Allow-Headers")
+		resp.Header.Del("Access-Control-Allow-Credentials")
+		resp.Header.Del("Access-Control-Expose-Headers")
+		resp.Header.Del("Access-Control-Max-Age")
+		resp.Header.Del("X-New-Api-Version")
+		resp.Header.Del("X-Oneapi-Request-Id")
+		resp.Header.Del("X-Goog-Api-Key")
 		return nil
 	}
 	return rp
@@ -431,7 +457,7 @@ func (p *Proxy) ServeUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		"latest":   release.TagName,
 		"name":     release.Name,
 		"url":      release.HTMLURL,
-		"current":  "v0.4",
+		"current":  "v0.4.1",
 	})
 }
 

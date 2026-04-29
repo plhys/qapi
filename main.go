@@ -239,7 +239,7 @@ func main() {
 			runSetup()
 			return
 		case "version", "-v", "--version":
-			fmt.Println("qapi version 0.4")
+			fmt.Println("qapi version 0.4.1")
 			return
 		}
 	}
