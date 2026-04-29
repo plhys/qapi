@@ -13,6 +13,7 @@ llm:
   api_key: "sk-your-key"
   base_url: "https://api.openai.com/v1"
   model: "gpt-4o"
+  max_tokens: 4096
 
 # API 代理配置
 proxy:

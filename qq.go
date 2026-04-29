@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 )
@@ -269,34 +271,35 @@ func (b *QQBot) callLLM(chatID string) string {
 	messages := make([]map[string]interface{}, 0, len(history)+2)
 	messages = append(messages, map[string]interface{}{
 		"role": "system",
-		"content": `你是 Qapi，一个 API 网关管家 + 运维机器人 + 通用助手。
+		"content": `你是 Qapi，一个运行在 Linux 服务器上的运维智能体。
+
+## 行为模式
+1. 理解意图：分析用户想做什么，确定目标。
+2. 制定计划：需要几步？用到哪些工具？
+3. 执行：调用工具获取信息或执行操作。
+4. 验证：看结果是否符合预期，不符合就换方法。
+5. 报告：用简洁的纯文本告诉用户做了什么、结果如何。
 
 ## 核心规则
-1. 关于服务器、系统、网关的实时数据必须调用 tool 获取。
-2. 通用知识性问题可以直接回答（编程、技术、原理、概念解释等）。
-3. QQ 消息不支持 markdown，禁止使用代码块、表格、加粗等格式。用纯文本分行。
-4. 如果你不确定，先搜一下或问用户，不要乱猜。
+- 实时数据（系统状态、进程、日志等）必须调工具获取，禁止编造。
+- 通用知识问题直接回答，不用调工具。
+- 一个请求可以连续调用多个工具，比如先检查再修改。
+- 工具返回错误时，尝试换个参数或换个工具，不要直接放弃。
+- QQ 消息不支持 markdown。纯文本分行，用 - 列表，缩进层级区分。
+- 不确定时搜索或直接告诉用户，不要编造。
 
-## 行为准则
-- 用户说"查看"、"状态" → 直接调工具，不要反问。
-- 工具返回什么就整理成可读形式报告。
-- 可以连续调多个工具。
-- 运维问题优先调工具，常识问题直接答。
-- 简洁，只报有用信息。`,
+## 自我保护
+- 禁止 rm -rf / 等破坏性命令。
+- 被要求执行危险操作时，先警告用户后果并确认。`,
 	})
 	messages = append(messages, map[string]interface{}{
 		"role": "system",
-		"content": `你的运行环境是 Qapi，Go 语言编写的 API 反向代理网关 + QQ Bot，7MB 单文件，~2MB 内存。
+		"content": `你的环境：Qapi (Go) 反向代理网关 + Bot。代理端口 ` + b.cfg.Proxy.Listen + `，` + fmt.Sprintf("%d", len(b.cfg.Proxy.Pool.Upstreams)) + ` 个上游。
 
-功能：LLM API 透视转发 + 加权轮询负载均衡 + 故障自动摘除 + 路径路由 + QQ 故障通知。
-监听端口：` + b.cfg.Proxy.Listen + `
-
-管理 API：
-- GET /admin/upstreams → 查看上游（请求数、失败数、健康状态）
+你能用的管理接口：
+- GET /admin/upstreams → 上游状态
 - GET /v1/models → 模型列表
-- GET /health → "ok"
-
-上游配置在 config.yaml → proxy.pool.upstreams，当前有 ` + fmt.Sprintf("%d", len(b.cfg.Proxy.Pool.Upstreams)) + ` 个上游。`,
+- GET /health → "ok"`,
 	})
 
 	for _, h := range history {
@@ -476,13 +479,29 @@ func (b *QQBot) callLLM(chatID string) string {
 				},
 			},
 		},
+		{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        "write_file",
+				"description": "写入或覆盖文件内容。用于修改配置、创建脚本、编辑文件等。会先备份原文件(.bak)",
+				"parameters": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path":    map[string]string{"type": "string", "description": "文件路径，如 /opt/qapi/config.yaml"},
+						"content": map[string]string{"type": "string", "description": "要写入的完整文件内容"},
+					},
+					"required": []string{"path", "content"},
+				},
+			},
+		},
 	}
 
 	body := map[string]interface{}{
-		"model":    b.cfg.LLM.Model,
-		"messages": messages,
-		"tools":    tools,
+		"model":       b.cfg.LLM.Model,
+		"messages":    messages,
+		"tools":       tools,
 		"tool_choice": "auto",
+		"max_tokens":  b.cfg.LLM.MaxTokens,
 	}
 
 	hadToolCall := false
@@ -493,11 +512,15 @@ func (b *QQBot) chatWithTools(body map[string]interface{}, messages []map[string
 	if len(messages) > 60 {
 		return "对话过长，请发送新问题"
 	}
-	payload, _ := json.Marshal(body)
-	url := fmt.Sprintf("%s/chat/completions", b.cfg.LLM.BaseURL)
-	log.Printf("[LLM] 请求 %s model=%s msgs=%d", url, b.cfg.LLM.Model, len(messages))
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
+	body["stream"] = true
+	body["max_tokens"] = b.cfg.LLM.MaxTokens
+
+	payload, _ := json.Marshal(body)
+	apiURL := fmt.Sprintf("%s/chat/completions", b.cfg.LLM.BaseURL)
+	log.Printf("[LLM] 请求 %s model=%s msgs=%d stream=true", apiURL, b.cfg.LLM.Model, len(messages))
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(payload))
 	if err != nil {
 		log.Printf("[LLM] 请求构建失败: %v", err)
 		return ""
@@ -505,7 +528,7 @@ func (b *QQBot) chatWithTools(body map[string]interface{}, messages []map[string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+b.cfg.LLM.APIKey)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	resp, err := b.client.Do(req.WithContext(ctx))
 	if err != nil {
@@ -520,67 +543,157 @@ func (b *QQBot) chatWithTools(body map[string]interface{}, messages []map[string
 		return ""
 	}
 
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content   string `json:"content"`
-				ToolCalls []struct {
-					ID   string `json:"id"`
-					Type string `json:"type"`
-					Func struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("[LLM] 解析失败: %v", err)
+	sr := parseSSEStream(resp.Body)
+	if sr.err != nil {
+		log.Printf("[LLM] SSE 解析失败: %v", sr.err)
 		return ""
 	}
 
-	if len(result.Choices) == 0 {
-		return ""
-	}
+	if len(sr.toolCalls) > 0 {
+		*hadToolCall = true
 
-	msg := result.Choices[0].Message
-
-	if len(msg.ToolCalls) == 0 {
-		if !*hadToolCall && looksLikeFabricatedData(msg.Content) {
-			messages = append(messages, map[string]interface{}{
-				"role": "user", "content": "你必须调用工具获取真实数据，禁止编造。请重新执行。",
-			})
-			body["messages"] = messages
-			return b.chatWithTools(body, messages, hadToolCall)
-		}
-		return msg.Content
-	}
-
-	*hadToolCall = true
-
-	toolResults := make([]string, 0, len(msg.ToolCalls))
-	for _, tc := range msg.ToolCalls {
-		result := b.executeTool(tc.Func.Name, tc.Func.Arguments)
-		// 预格式化工具结果，让 LLM 拿到的是可读文本，避免返回原始 JSON
-		formatted := b.formatToolResult(result)
-		toolResults = append(toolResults, formatted)
 		messages = append(messages, map[string]interface{}{
-			"role":         "tool",
-			"tool_call_id": tc.ID,
-			"content":      formatted,
+			"role": "assistant",
+			"tool_calls": sr.toolCalls,
+		})
+
+		toolResults := make([]string, 0, len(sr.toolCalls))
+		for _, tc := range sr.toolCallData {
+			result := b.executeTool(tc.name, tc.arguments)
+			formatted := b.formatToolResult(result)
+			toolResults = append(toolResults, formatted)
+			messages = append(messages, map[string]interface{}{
+				"role":         "tool",
+				"tool_call_id": tc.id,
+				"content":      formatted,
+			})
+		}
+
+		nextBody := map[string]interface{}{
+			"model":       b.cfg.LLM.Model,
+			"messages":    messages,
+			"tools":       body["tools"],
+			"tool_choice": "auto",
+			"max_tokens":  b.cfg.LLM.MaxTokens,
+		}
+		// 防止无限循环，最多 10 轮工具调用
+		maxDepth := 10
+		if d, ok := body["_tool_depth"].(int); ok {
+			if d >= maxDepth {
+				return "工具调用已达上限，请尝试简化你的问题。\n部分结果：\n" + strings.Join(toolResults, "\n---\n")
+			}
+			nextBody["_tool_depth"] = d + 1
+		} else {
+			nextBody["_tool_depth"] = 1
+		}
+		final := b.chatWithTools(nextBody, messages, hadToolCall)
+		if final == "" {
+			return "工具执行结果：\n" + strings.Join(toolResults, "\n---\n")
+		}
+		return final
+	}
+
+	if sr.content == "" {
+		return ""
+	}
+
+	if !*hadToolCall && looksLikeFabricatedData(sr.content) {
+		messages = append(messages, map[string]interface{}{
+			"role": "user", "content": "你必须调用工具获取真实数据，禁止编造。请重新执行。",
+		})
+		body["messages"] = messages
+		return b.chatWithTools(body, messages, hadToolCall)
+	}
+
+	return sr.content
+}
+
+type sseStreamResult struct {
+	content      string
+	toolCalls    []map[string]interface{}
+	toolCallData []toolCallEntry
+	err          error
+}
+
+type toolCallEntry struct {
+	index     int
+	id        string
+	name      string
+	arguments string
+}
+
+func parseSSEStream(body io.Reader) sseStreamResult {
+	sr := sseStreamResult{}
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	tcAcc := make(map[int]*toolCallEntry)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var ev struct {
+			Choices []struct {
+				Delta struct {
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			continue
+		}
+
+		for _, choice := range ev.Choices {
+			if choice.Delta.Content != "" {
+				sr.content += choice.Delta.Content
+			}
+			for _, tc := range choice.Delta.ToolCalls {
+				acc, ok := tcAcc[tc.Index]
+				if !ok {
+					acc = &toolCallEntry{index: tc.Index}
+					tcAcc[tc.Index] = acc
+				}
+				if tc.ID != "" {
+					acc.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					acc.name = tc.Function.Name
+				}
+				acc.arguments += tc.Function.Arguments
+			}
+		}
+	}
+
+	sr.err = scanner.Err()
+
+	for _, tc := range tcAcc {
+		sr.toolCallData = append(sr.toolCallData, *tc)
+		sr.toolCalls = append(sr.toolCalls, map[string]interface{}{
+			"id":   tc.id,
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":      tc.name,
+				"arguments": tc.arguments,
+			},
 		})
 	}
 
-	nextBody := map[string]interface{}{
-		"model":    b.cfg.LLM.Model,
-		"messages": messages,
-	}
-	final := b.chatWithTools(nextBody, messages, hadToolCall)
-	if final == "" {
-		return "工具执行结果：\n" + strings.Join(toolResults, "\n---\n")
-	}
-	return final
+	return sr
 }
 
 func (b *QQBot) formatToolResult(raw string) string {
@@ -588,8 +701,8 @@ func (b *QQBot) formatToolResult(raw string) string {
 	if !strings.HasPrefix(strings.TrimSpace(raw), "{") && !strings.HasPrefix(strings.TrimSpace(raw), "[") {
 		// 截断过长输出
 		lines := strings.Split(raw, "\n")
-		if len(lines) > 20 {
-			return strings.Join(lines[:20], "\n") + fmt.Sprintf("\n... 共 %d 行输出，已截断", len(lines))
+		if len(lines) > 60 {
+			return strings.Join(lines[:60], "\n") + fmt.Sprintf("\n... 共 %d 行输出，已截断", len(lines))
 		}
 		return raw
 	}
@@ -607,7 +720,7 @@ func (b *QQBot) formatToolResult(raw string) string {
 		healthy, total := 0, len(upstreams)
 		var lines []string
 		for i, u := range upstreams {
-			if i >= 15 {
+			if i >= 50 {
 				lines = append(lines, fmt.Sprintf("... 共 %d 个上游", total))
 				break
 			}
@@ -634,7 +747,7 @@ func (b *QQBot) formatToolResult(raw string) string {
 	if err := json.Unmarshal([]byte(raw), &modelsResp); err == nil && len(modelsResp.Data) > 0 {
 		lines := make([]string, 0, len(modelsResp.Data)+2)
 		for i, m := range modelsResp.Data {
-			if i >= 30 {
+			if i >= 60 {
 				lines = append(lines, fmt.Sprintf("... 共 %d 个模型", len(modelsResp.Data)))
 				break
 			}
@@ -658,8 +771,8 @@ func (b *QQBot) formatToolResult(raw string) string {
 	}
 
 	// 无法解析的 JSON，截断返回
-	if len(raw) > 800 {
-		return raw[:800] + "\n... 已截断"
+	if len(raw) > 3000 {
+		return raw[:3000] + "\n... 已截断"
 	}
 	return raw
 }
@@ -922,25 +1035,28 @@ func (b *QQBot) executeTool(name, args string) string {
 		}
 		json.Unmarshal([]byte(args), &p)
 		if p.Command == "" {
-			return `{"error":"需要命令"}`
+			return "错误：需要执行的命令"
 		}
-		cmd := exec.Command("sh", "-c", p.Command)
-		if p.Workdir != "" {
-			cmd.Dir = p.Workdir
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
-		cmd = exec.CommandContext(ctx, "sh", "-c", p.Command)
+		cmd := exec.CommandContext(ctx, "sh", "-c", p.Command)
 		if p.Workdir != "" {
 			cmd.Dir = p.Workdir
 		}
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Sprintf("命令执行失败: %v\n输出: %s", err, strings.TrimSpace(string(output)))
+			errStr := strings.TrimSpace(string(output))
+			if errStr == "" {
+				return fmt.Sprintf("命令失败: %v (无更多输出)", err)
+			}
+			return fmt.Sprintf("命令失败: %v\n%s", err, errStr)
 		}
 		result := strings.TrimSpace(string(output))
 		if result == "" {
-			return "命令执行成功（无输出）"
+			return "命令成功，无输出"
+		}
+		if len(result) > 3000 {
+			return result[:3000] + "\n... 输出已截断"
 		}
 		return result
 
@@ -954,10 +1070,37 @@ func (b *QQBot) executeTool(name, args string) string {
 		if err != nil {
 			return fmt.Sprintf("读取失败: %v", err)
 		}
-		if len(data) > 4096 {
-			return string(data[:4096]) + "\n... (文件过长，已截断)"
+		if len(data) > 16384 {
+			return string(data[:16384]) + "\n... (文件过长，已截断)"
 		}
 		return string(data)
+
+	case "write_file":
+		var p struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		json.Unmarshal([]byte(args), &p)
+		if p.Path == "" {
+			return "错误：需要文件路径"
+		}
+		if p.Content == "" {
+			return "错误：需要文件内容"
+		}
+		backup := p.Path + ".bak"
+		origData, _ := os.ReadFile(p.Path)
+		if len(origData) > 0 {
+			if err := os.WriteFile(backup, origData, 0644); err != nil {
+				return fmt.Sprintf("备份失败: %v", err)
+			}
+		}
+		if err := os.WriteFile(p.Path, []byte(p.Content), 0644); err != nil {
+			return fmt.Sprintf("写入失败: %v", err)
+		}
+		if len(origData) > 0 {
+			return fmt.Sprintf("已写入 %d 字节到 %s (原文件备份到 %s)", len(p.Content), p.Path, backup)
+		}
+		return fmt.Sprintf("已创建文件 %s (%d 字节)", p.Path, len(p.Content))
 
 	case "manage_service":
 		var p struct {
@@ -1058,16 +1201,37 @@ func (b *QQBot) runCmd(name string, arg ...string) string {
 	return result
 }
 
+const qqMaxMsgLen = 2000
+
 func (b *QQBot) SendMessage(openID, content string) {
-	b.sendHTTP(fmt.Sprintf("%s/v2/users/%s/messages", b.apiBase(), openID), content, "")
+	b.sendMsgSplitted(fmt.Sprintf("%s/v2/users/%s/messages", b.apiBase(), openID), content, "")
 }
 
 func (b *QQBot) sendC2C(openID, content, msgID string) {
-	b.sendHTTP(fmt.Sprintf("%s/v2/users/%s/messages", b.apiBase(), openID), content, msgID)
+	b.sendMsgSplitted(fmt.Sprintf("%s/v2/users/%s/messages", b.apiBase(), openID), content, msgID)
 }
 
 func (b *QQBot) sendGroup(groupOpenID, content, msgID string) {
-	b.sendHTTP(fmt.Sprintf("%s/v2/groups/%s/messages", b.apiBase(), groupOpenID), content, msgID)
+	b.sendMsgSplitted(fmt.Sprintf("%s/v2/groups/%s/messages", b.apiBase(), groupOpenID), content, msgID)
+}
+
+func (b *QQBot) sendMsgSplitted(url, content, msgID string) {
+	if utf8.RuneCountInString(content) <= qqMaxMsgLen {
+		b.sendHTTP(url, content, msgID)
+		return
+	}
+
+	runes := []rune(content)
+	parts := (utf8.RuneCountInString(content) + qqMaxMsgLen - 1) / qqMaxMsgLen
+	for i := 0; i < len(runes); i += qqMaxMsgLen {
+		end := i + qqMaxMsgLen
+		if end > len(runes) {
+			end = len(runes)
+		}
+		part := fmt.Sprintf("[%d/%d]\n%s", (i/qqMaxMsgLen)+1, parts, string(runes[i:end]))
+		b.sendHTTP(url, part, msgID)
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func (b *QQBot) sendHTTP(url, content, msgID string) {

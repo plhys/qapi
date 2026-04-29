@@ -64,7 +64,29 @@ Qapi 是一个 Go 语言编写的 QQ 机器人 + LLM API 反向代理网关。�
 - 启动校验：占位 AppID/AppSecret 直接 `log.Fatalf` 退出
 - Token 解析兼容 `expires_in` 字符串/整数
 
-### v0.3 — 智能运维体 + 用户体验
+### v0.4 — Agent 核心强化 + 通用化
+
+#### Agent 能力大幅增强
+- **Agentic 系统提示词**：完全重写为 ReAct 模式（理解意图→制定计划→执行→验证→报告），支持多步推理
+- **多轮工具调用修复**：工具结果后续递归调用之前丢失了 tools 参数，导致 Agent 只能调一次工具就结束。现在修复后支持最多 10 轮连续推理执行
+- **自纠错能力**：工具返回错误时提示 Agent 换方案重试，而不是直接放弃
+- **通用化**：系统提示词移除所有特定服务器绑定（不再硬编码 AxonHub/Docker/内网 IP），适配任何部署环境
+
+#### 执行能力修复
+- **run_shell bug 修复**：之前创建了两个 exec.Command（第一个配置了 Dir/Timeout 后被第二个覆盖），现在只创建一个 exec.CommandContext，超时从 30s 延长到 120s
+- **输出截断**：run_shell 结果超过 3000 字节自动截断，防止 token 爆炸
+- **错误信息优化**：命令失败时同时输出 stderr 和退出码
+
+#### 新增工具
+- **write_file**：写入/覆盖文件（修改配置、创建脚本），自动备份原文件为 .bak
+
+#### 版本号
+- main.go → `qapi version 0.4`
+- proxy.go `ServeUpdateCheck` → `"current": "v0.4"`
+
+### v0.3.1 — Agent 核心强化 + 多轮调用修复
+
+（v0.3.1 改动已整合进 v0.4）
 
 #### QQ 机器人智能化
 - **解除限制**：系统提示词从"只能调工具"改为"常识直接答，运维调工具"，超出范围也能正常对话
@@ -164,7 +186,7 @@ qapi/
 
 ### 直接运行
 ```bash
-wget https://github.com/plhys/qapi/releases/download/v0.3/qapi-linux-amd64
+wget https://github.com/plhys/qapi/releases/download/v0.4/qapi-linux-amd64
 chmod +x qapi-linux-amd64
 ./qapi-linux-amd64 setup
 ./qapi-linux-amd64 config.yaml

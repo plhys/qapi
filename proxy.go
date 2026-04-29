@@ -431,7 +431,7 @@ func (p *Proxy) ServeUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		"latest":   release.TagName,
 		"name":     release.Name,
 		"url":      release.HTMLURL,
-		"current":  "v0.3",
+		"current":  "v0.4",
 	})
 }
 

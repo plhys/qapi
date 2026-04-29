@@ -14,10 +14,11 @@ type Config struct {
 	} `yaml:"qq"`
 
 	LLM struct {
-		Provider string `yaml:"provider"`
-		APIKey   string `yaml:"api_key"`
-		BaseURL  string `yaml:"base_url"`
-		Model    string `yaml:"model"`
+		Provider  string `yaml:"provider"`
+		APIKey    string `yaml:"api_key"`
+		BaseURL   string `yaml:"base_url"`
+		Model     string `yaml:"model"`
+		MaxTokens int    `yaml:"max_tokens"`
 	} `yaml:"llm"`
 
 	Proxy struct {
@@ -75,6 +76,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.LLM.Model == "" {
 		c.LLM.Model = "gpt-4o"
+	}
+	if c.LLM.MaxTokens == 0 {
+		c.LLM.MaxTokens = 4096
 	}
 
 	setDefaults := func(p *ProxyPool) {

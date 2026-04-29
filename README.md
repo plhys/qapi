@@ -146,11 +146,32 @@ docker build -t qapi .
 docker run -d --name qapi -p 8080:8080 -v ./data:/app/data qapi
 ```
 
-### 健康检查
+### 更新日志
 
-部署后验证：
+### v0.4 (2026-04-29)
 
-```bash
-curl http://localhost:8080/health
-# → ok
-```
+**Agent 核心强化 + 通用化**
+
+- 系统提示词全面重写为 ReAct 模式（理解意图→制定计划→执行→验证），Agent 不再只会一问一答
+- 修复多轮工具调用 bug：之前 Agent 调了一次工具拿到结果后就只能给最终答案了，现在支持最多 10 轮连续推理（先查状态→分析→再执行→验证）
+- `run_shell` bug 修复：去掉重复创建的 exec.Command，超时从 30s 延长到 120s
+- 新增 `write_file` 工具：写入/修改文件，自动备份为 .bak
+- 系统提示词完全通用化，移除任何特定服务器绑定，适配任何部署环境
+
+### v0.3 (2026-04-27)
+
+- Bot 解除"只能调工具"限制，常识问题直接回答
+- 新增 web_search / run_shell / read_file / manage_service 4 个工具
+- 同 URL 不同 Key 可添加多上游轮询
+- 工具输出预格式化，杜绝原始 JSON 出现在回复中
+
+### v0.2
+
+- Agent 工具调用 (11 个工具)
+- 路径路由 + 加权轮询负载均衡
+- Webhook 端点 + ED25519 签名校验
+
+### v0.1
+
+- QQ Bot WSS 长连接 + API 反向代理
+- 对话记忆 + YAML 配置
