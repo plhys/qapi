@@ -156,6 +156,9 @@ func (p *Proxy) getOrCreateProxy(upstreamURL string, target *url.URL) *httputil.
 
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = 100 * time.Millisecond
+	rp.Transport = &http.Transport{
+		DisableCompression: true,
+	}
 	rp.ModifyResponse = func(resp *http.Response) error {
 		if resp.Header.Get("Content-Encoding") == "" && resp.Body != nil {
 			peek := make([]byte, 2)
@@ -167,6 +170,8 @@ func (p *Proxy) getOrCreateProxy(upstreamURL string, target *url.URL) *httputil.
 					resp.Header.Del("Content-Length")
 					resp.Header.Set("Content-Encoding", "identity")
 					resp.Uncompressed = true
+				} else {
+					resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(peek[:n]), resp.Body))
 				}
 			} else {
 				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(peek[:n]), resp.Body))
@@ -273,7 +278,11 @@ func (p *UpstreamPool) healthCheckLoop() {
 
 		for _, s := range states {
 			go func(u UpstreamState) {
-				resp, err := http.Get(u.URL + "/health")
+				req, _ := http.NewRequest("GET", u.URL+"/v1/models", nil)
+				if u.Key != "" {
+					req.Header.Set("Authorization", "Bearer "+u.Key)
+				}
+				resp, err := http.DefaultClient.Do(req)
 				p.mu.Lock()
 				defer p.mu.Unlock()
 
@@ -292,6 +301,9 @@ func (p *UpstreamPool) healthCheckLoop() {
 						}
 						break
 					}
+				}
+				if resp != nil {
+					resp.Body.Close()
 				}
 				p.upstreams.Store(current)
 			}(s)
